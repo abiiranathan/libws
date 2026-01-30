@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -g -D_GNU_SOURCE -Iinclude
-LDFLAGS = -lssl -lcrypto
+CFLAGS = -Wall -Wextra -g -pthread -D_GNU_SOURCE -Iinclude
+LDFLAGS = -lssl -lcrypto -pthread
 
 # Directories
 SRC_DIR = src
