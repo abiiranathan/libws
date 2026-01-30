@@ -56,6 +56,9 @@ struct ws_server_s {
     ws_worker_t* workers;
     int worker_count;
 
+    // SSL
+    SSL_CTX* ssl_ctx;
+
     // Global stats
     pthread_mutex_t stats_lock;
     size_t total_clients;
@@ -107,7 +110,25 @@ static int server_write_cb(ws_client_t* client, const uint8_t* data, size_t len)
     // Try to write directly if buffer is empty
     size_t written = 0;
     if (conn->out_len == 0) {
-        ssize_t n = send(client->socket_fd, data, len, MSG_NOSIGNAL);
+        ssize_t n;
+        if (client->use_ssl && client->ssl) {
+            int r = SSL_write(client->ssl, data, (int)len);
+            if (r > 0) {
+                n = r;
+            } else {
+                int err = SSL_get_error(client->ssl, r);
+                if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
+                    n = -1;
+                    errno = EAGAIN;
+                } else {
+                    n = -1;
+                    errno = EIO;
+                }
+            }
+        } else {
+            n = send(client->socket_fd, data, len, MSG_NOSIGNAL);
+        }
+
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 written = 0;
@@ -119,7 +140,7 @@ static int server_write_cb(ws_client_t* client, const uint8_t* data, size_t len)
             written = (size_t)n;
         }
     }
-    
+
     // Buffer remaining
     if (written < len) {
         size_t remaining = len - written;
@@ -136,14 +157,14 @@ static int server_write_cb(ws_client_t* client, const uint8_t* data, size_t len)
         }
         memcpy(conn->out_buf + conn->out_len, data + written, remaining);
         conn->out_len += remaining;
-        
+
         // Register for EPOLLOUT
         struct epoll_event ev;
-        ev.events = EPOLLIN | EPOLLOUT | EPOLLET; // Edge Triggered
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLET;  // Edge Triggered
         ev.data.ptr = conn;
         epoll_ctl(conn->epoll_fd, EPOLL_CTL_MOD, client->socket_fd, &ev);
     }
-    
+
     pthread_mutex_unlock(&conn->out_lock);
     return 0;
 }
@@ -178,11 +199,11 @@ static void* worker_routine(void* arg) {
                     conn->server = worker->server;
                     conn->worker = worker;
                     pthread_mutex_init(&conn->out_lock, NULL);
-                    
+
                     // Do NOT set client->user_data to conn, let the user use it.
                     // We access conn via casting in write_cb and worker loop.
                     conn->ws_client.user_data = NULL;
-                    
+
                     // We need to use the server's callbacks but wrapped.
                     // Since ws_client_t calls callbacks with itself as 1st arg,
                     // and we want to expose ws_client_t to the user, this is fine.
@@ -191,11 +212,32 @@ static void* worker_routine(void* arg) {
                     conn->ws_client.on_message = worker->server->config.on_message;
                     conn->ws_client.on_close = worker->server->config.on_close;
 
+                    // Setup SSL
+                    if (worker->server->ssl_ctx) {
+                        conn->ws_client.use_ssl = true;
+                        conn->ws_client.ssl_ctx = worker->server->ssl_ctx;  // Shared context
+                        SSL_CTX_up_ref(
+                            conn->ws_client.ssl_ctx);  // Increment ref count so ws_cleanup doesn't destroy it
+
+                        conn->ws_client.ssl = SSL_new(worker->server->ssl_ctx);
+                        SSL_set_fd(conn->ws_client.ssl, client_fd);
+
+                        // Enable partial writes for non-blocking buffer logic
+                        SSL_set_mode(conn->ws_client.ssl,
+                                     SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+
+                        SSL_set_accept_state(conn->ws_client.ssl);  // Prepare for handshake
+                    }
+
                     // Set custom write
                     ws_set_write_cb(&conn->ws_client, server_write_cb);
 
-                    // Handshake
+                    // Handshake (HTTP Upgrade)
+                    // Note: If using SSL, this ws_accept logic only sets state.
+                    // The actual handshake data will be read by the worker loop.
                     if (ws_accept(&conn->ws_client, client_fd) != WS_OK) {
+                        ws_cleanup(&conn->ws_client);
+                        pthread_mutex_destroy(&conn->out_lock);
                         close(client_fd);
                         free(conn);
                         continue;
@@ -208,7 +250,10 @@ static void* worker_routine(void* arg) {
                     ev.data.ptr = conn;
                     if (epoll_ctl(worker->epoll_fd, EPOLL_CTL_ADD, client_fd, &ev) == -1) {
                         ws_cleanup(&conn->ws_client);
-                        free(conn);
+                        pthread_mutex_destroy(&conn->out_lock);
+                        free(conn);  // socket closed by ws_cleanup?
+                        // ws_cleanup closes socket if it is not -1.
+                        // ws_accept set socket_fd. So ws_cleanup closed it.
                         continue;
                     }
 
@@ -261,7 +306,7 @@ static void* worker_routine(void* arg) {
             // Handle Read
             if (evs & EPOLLIN) {
                 while (true) {
-                    ssize_t count = read(fd, buffer, sizeof(buffer));
+                    ssize_t count = ws_read(&conn->ws_client, buffer, sizeof(buffer));
                     if (count == -1) {
                         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
                         // Error
@@ -279,7 +324,25 @@ static void* worker_routine(void* arg) {
             if (evs & EPOLLOUT) {
                 pthread_mutex_lock(&conn->out_lock);
                 if (conn->out_len > 0) {
-                    ssize_t written = send(fd, conn->out_buf, conn->out_len, MSG_NOSIGNAL);
+                    ssize_t written;
+                    if (conn->ws_client.use_ssl && conn->ws_client.ssl) {
+                        int r = SSL_write(conn->ws_client.ssl, conn->out_buf, (int)conn->out_len);
+                        if (r > 0) {
+                            written = r;
+                        } else {
+                            int err = SSL_get_error(conn->ws_client.ssl, r);
+                            if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
+                                written = -1;
+                                errno = EAGAIN;
+                            } else {
+                                written = -1;
+                                errno = EIO;
+                            }
+                        }
+                    } else {
+                        written = send(fd, conn->out_buf, conn->out_len, MSG_NOSIGNAL);
+                    }
+
                     if (written > 0) {
                         if ((size_t)written == conn->out_len) {
                             // Done
@@ -312,6 +375,25 @@ ws_server_t* ws_server_create(ws_server_config_t* config) {
         server->config.thread_count = get_nprocs();
     }
     pthread_mutex_init(&server->stats_lock, NULL);
+
+    // Init SSL
+    if (server->config.ssl_cert && server->config.ssl_key) {
+        server->ssl_ctx = SSL_CTX_new(TLS_server_method());
+        if (!server->ssl_ctx) {
+            fprintf(stderr, "Failed to create SSL context\n");
+            // Clean up?
+        } else {
+            if (SSL_CTX_use_certificate_file(server->ssl_ctx, server->config.ssl_cert, SSL_FILETYPE_PEM) <= 0) {
+                fprintf(stderr, "Failed to load cert file\n");
+                ERR_print_errors_fp(stderr);
+            }
+            if (SSL_CTX_use_PrivateKey_file(server->ssl_ctx, server->config.ssl_key, SSL_FILETYPE_PEM) <= 0) {
+                fprintf(stderr, "Failed to load key file\n");
+                ERR_print_errors_fp(stderr);
+            }
+        }
+    }
+
     return server;
 }
 
@@ -419,6 +501,11 @@ void ws_server_destroy(ws_server_t* server) {
 
     free(server->workers);
     pthread_mutex_destroy(&server->stats_lock);
+
+    if (server->ssl_ctx) {
+        SSL_CTX_free(server->ssl_ctx);
+    }
+
     free(server);
 }
 

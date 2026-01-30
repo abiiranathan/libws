@@ -1,9 +1,10 @@
 # WebSocket C Library
 
-A robust, thread-safe, and feature-rich WebSocket (RFC 6455) implementation in C.
+A robust, thread-safe, and feature-rich WebSocket (RFC 6455) implementation in C, featuring secure TLS/SSL support (wss://).
 
 ## Features
 
+- **TLS/SSL Support**: Secure connections (wss://) using OpenSSL with certificate verification and SNI.
 - **Thread Safety**: Full thread safety with mutex protection for all public APIs.
 - **RFC 6455 Compliant**: Passes Autobahn test suite requirements (fragmentation, masking, UTF-8, control frames).
 - **Comprehensive Error Handling**: Structured error codes (`WS_ERR_*`) and human-readable strings via `ws_strerror()`.
@@ -22,15 +23,17 @@ A robust, thread-safe, and feature-rich WebSocket (RFC 6455) implementation in C
 .
 ├── Makefile            # Build system
 ├── include
-│   └── websocket.h     # Public API header
+│   ├── websocket.h     # Public API header (Client/Core)
+│   ├── ws_client_lib.h # Helper for blocking clients
+│   └── ws_server.h     # Server API header
 ├── src
-│   └── websocket.c     # Library implementation
+│   ├── websocket.c     # Core library implementation
+│   ├── ws_client_lib.c # Client helper implementation
+│   └── ws_server.c     # Multi-threaded Epoll Server implementation
 ├── examples
-│   ├── client.c        # Simple client
-│   ├── server.c        # Non-blocking epoll server
-│   ├── chat_client.c   # Interactive chat client
-│   └── chat_server.c   # Chat server
-└── build               # Build artifacts
+│   ├── chat_client.c   # Interactive CLI Chat Client
+│   └── chat_server.c   # Interactive Chat Server
+└── build               # Build artifacts (binaries, libs)
 ```
 
 ## Building
@@ -41,9 +44,51 @@ To build the library and examples:
 make
 ```
 
-Dependencies:
+**Dependencies:**
 - OpenSSL (`libssl-dev`)
 - Pthread (`-pthread`)
+
+## Running the Examples
+
+### Chat Server
+
+The server supports both standard (ws://) and secure (wss://) connections, and configurable ports.
+
+**Usage:**
+```bash
+# Standard HTTP (ws://) on default port 8081
+./build/bin/chat_server
+
+# Standard HTTP (ws://) on custom port
+./build/bin/chat_server 9000
+
+# Secure HTTPS (wss://) on default port 8081
+./build/bin/chat_server cert.pem key.pem
+
+# Secure HTTPS (wss://) on custom port
+./build/bin/chat_server 8443 cert.pem key.pem
+```
+
+To generate a self-signed certificate for testing:
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
+```
+
+### Chat Client
+
+The client connects to WebSocket servers, automatically detecting `ws://` vs `wss://`.
+
+**Usage:**
+```bash
+# Connect to standard server (defaults to ws://localhost:8081)
+./build/bin/chat_client
+
+# Connect to specific URL
+./build/bin/chat_client ws://localhost:9000
+
+# Connect securely (TLS)
+./build/bin/chat_client wss://localhost:8443
+```
 
 ## API Overview
 
@@ -69,10 +114,29 @@ ws_set_validate_utf8(&client, true);           // Enforce UTF-8 checking
 
 ### Connection (Client Mode)
 
+The library automatically handles TLS if port 443 is used, or if explicitly enabled.
+
 ```c
-ws_error_t err = ws_connect(&client, "localhost", 8080, "/");
+// Manual TLS configuration (if not using standard 443)
+ws_set_ssl(&client, true);
+
+ws_error_t err = ws_connect(&client, "localhost", 8443, "/");
 if (err != WS_OK) {
     fprintf(stderr, "Connect failed: %s\n", ws_strerror(err));
+}
+```
+
+### Reading Data
+
+The library provides `ws_read` which abstracts away the underlying SSL vs Socket read logic.
+
+```c
+// In your read loop
+uint8_t buffer[4096];
+ssize_t n = ws_read(&client, buffer, sizeof(buffer));
+
+if (n > 0) {
+    ws_consume(&client, buffer, (size_t)n);
 }
 ```
 
@@ -97,18 +161,6 @@ ws_send_binary(&client, data, sizeof(data));
 ws_send_ping(&client, NULL, 0);
 ```
 
-### Event Loop Integration
-
-Feed data from your socket into the library:
-
-```c
-// In your read loop
-ssize_t n = read(socket_fd, buffer, sizeof(buffer));
-if (n > 0) {
-    ws_consume(&client, buffer, (size_t)n);
-}
-```
-
 ### Thread Safety
 
 The library uses `pthread_mutex` internally. You can safely call `ws_send_*` or `ws_close` from multiple threads.
@@ -129,6 +181,8 @@ The library uses `ws_error_t` for return values:
 - `WS_ERR_ALLOCATION_FAILURE`
 - `WS_ERR_INVALID_PARAMETER`
 - `WS_ERR_CONNECT_FAILED`
+- `WS_ERR_SSL_FAILED`
+- `WS_ERR_CERT_VALIDATION_FAILED`
 - `WS_ERR_PROTOCOL_VIOLATION`
 - `WS_ERR_PAYLOAD_TOO_LARGE`
 - ... and more.

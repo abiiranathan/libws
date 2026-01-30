@@ -60,6 +60,10 @@ const char* ws_strerror(ws_error_t err) {
         case WS_ERR_LOCKED:
             return "Resource locked";
         case WS_ERR_UNKNOWN:
+        case WS_ERR_SSL_FAILED:
+            return "SSL/TLS error";
+        case WS_ERR_CERT_VALIDATION_FAILED:
+            return "Certificate validation failed";
         default:
             return "Unknown error";
     }
@@ -172,6 +176,9 @@ void ws_init(ws_client_t* client) {
     memset(client, 0, sizeof(ws_client_t));
     client->socket_fd = -1;
     client->state = WS_STATE_CLOSED;
+    client->ssl = NULL;
+    client->ssl_ctx = NULL;
+    client->use_ssl = false;
 
     // Default config
     client->max_payload_size = 1024 * 1024 * 16;  // 16MB
@@ -192,6 +199,17 @@ void ws_init(ws_client_t* client) {
 void ws_cleanup(ws_client_t* client) {
     pthread_mutex_lock(&client->lock);
 
+    if (client->ssl) {
+        SSL_shutdown(client->ssl);
+        SSL_free(client->ssl);
+        client->ssl = NULL;
+    }
+
+    if (client->ssl_ctx) {
+        SSL_CTX_free(client->ssl_ctx);
+        client->ssl_ctx = NULL;
+    }
+
     if (client->recv_buffer) free(client->recv_buffer);
     if (client->send_buffer) free(client->send_buffer);
     if (client->frag_buffer) free(client->frag_buffer);
@@ -209,8 +227,36 @@ void ws_cleanup(ws_client_t* client) {
     pthread_mutex_destroy(&client->lock);
 }
 
+static int default_read_cb(ws_client_t* client, uint8_t* buffer, size_t len) {
+    if (client->socket_fd < 0) return -1;
+
+    if (client->use_ssl && client->ssl) {
+        int r = SSL_read(client->ssl, buffer, (int)len);
+        if (r <= 0) {
+            int err = SSL_get_error(client->ssl, r);
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                errno = EAGAIN;
+                return -1;
+            }
+            // For other errors, we let the caller handle it (r <= 0).
+            // Usually r=0 means shutdown, r<0 means error.
+        }
+        return r;
+    }
+
+    return read(client->socket_fd, buffer, len);
+}
+
 static int default_write_cb(ws_client_t* client, const uint8_t* data, size_t len) {
     if (client->socket_fd < 0) return -1;
+
+    if (client->use_ssl && client->ssl) {
+        int written = SSL_write(client->ssl, data, (int)len);
+        if (written <= 0) return -1;
+        client->stats.bytes_sent += (uint64_t)written;
+        return 0;
+    }
+
     ssize_t written = send(client->socket_fd, data, len, MSG_NOSIGNAL);
     if (written != (ssize_t)len) return -1;
     client->stats.bytes_sent += len;
@@ -226,6 +272,9 @@ static int send_raw_data(ws_client_t* client, const void* data, size_t len) {
 
 ws_error_t ws_connect(ws_client_t* client, const char* host, int port, const char* path) {
     pthread_mutex_lock(&client->lock);
+
+    // Auto-detect SSL port
+    if (port == 443) client->use_ssl = true;
 
     if (client->state != WS_STATE_CLOSED) {
         pthread_mutex_unlock(&client->lock);
@@ -255,6 +304,48 @@ ws_error_t ws_connect(ws_client_t* client, const char* host, int port, const cha
         client->socket_fd = -1;
         pthread_mutex_unlock(&client->lock);
         return WS_ERR_CONNECT_FAILED;
+    }
+
+    if (client->use_ssl) {
+        client->ssl_ctx = SSL_CTX_new(TLS_client_method());
+        if (!client->ssl_ctx) {
+            close(client->socket_fd);
+            pthread_mutex_unlock(&client->lock);
+            return WS_ERR_ALLOCATION_FAILURE;
+        }
+
+        // Load default trust store
+        if (SSL_CTX_set_default_verify_paths(client->ssl_ctx) != 1) {
+            return WS_ERR_CERT_VALIDATION_FAILED;  // WS_ERR_CERT_VALIDATION_FAILED
+        }
+
+        SSL_CTX_set_verify(client->ssl_ctx, SSL_VERIFY_PEER, NULL);
+
+        client->ssl = SSL_new(client->ssl_ctx);
+        SSL_set_fd(client->ssl, client->socket_fd);
+
+        // SNI
+        SSL_set_tlsext_host_name(client->ssl, host);
+
+        if (SSL_connect(client->ssl) != 1) {
+            // ERR_print_errors_fp(stderr);
+            SSL_free(client->ssl);
+            SSL_CTX_free(client->ssl_ctx);
+            close(client->socket_fd);
+            client->socket_fd = -1;
+            pthread_mutex_unlock(&client->lock);
+            return WS_ERR_CONNECT_FAILED;  // WS_ERR_SSL_FAILED
+        }
+
+        // Verify Certificate
+        if (SSL_get_verify_result(client->ssl) != X509_V_OK) {
+            SSL_free(client->ssl);
+            SSL_CTX_free(client->ssl_ctx);
+            close(client->socket_fd);
+            client->socket_fd = -1;
+            pthread_mutex_unlock(&client->lock);
+            return WS_ERR_CONNECT_FAILED;  // WS_ERR_CERT_VALIDATION_FAILED
+        }
     }
 
     client->is_server = false;
@@ -477,6 +568,13 @@ ws_error_t ws_consume(ws_client_t* client, const uint8_t* data, size_t len) {
 
     pthread_mutex_unlock(&client->lock);
     return WS_OK;
+}
+
+ssize_t ws_read(ws_client_t* client, void* buffer, size_t len) {
+    if (client->read_cb) {
+        return client->read_cb(client, (uint8_t*)buffer, len);
+    }
+    return default_read_cb(client, (uint8_t*)buffer, len);
 }
 
 static void dispatch_frame(ws_client_t* client, websocket_frame_t* frame) {
@@ -856,6 +954,12 @@ void ws_set_auto_ping(ws_client_t* client, bool enable) {
 void ws_set_validate_utf8(ws_client_t* client, bool enable) {
     pthread_mutex_lock(&client->lock);
     client->validate_utf8 = enable;
+    pthread_mutex_unlock(&client->lock);
+}
+
+void ws_set_ssl(ws_client_t* client, bool enable) {
+    pthread_mutex_lock(&client->lock);
+    client->use_ssl = enable;
     pthread_mutex_unlock(&client->lock);
 }
 

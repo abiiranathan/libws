@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -38,7 +39,7 @@
             height: 90vh;
             background-color: var(--chat-bg);
             border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -65,12 +66,14 @@
             height: 10px;
             border-radius: 50%;
             margin-right: 8px;
-            background-color: #F44336; /* Disconnected red */
+            background-color: #F44336;
+            /* Disconnected red */
             transition: background-color 0.3s;
         }
 
         .status-dot.connected {
-            background-color: #4CAF50; /* Connected green */
+            background-color: #4CAF50;
+            /* Connected green */
         }
 
         /* Chat Area */
@@ -92,8 +95,15 @@
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .message.received {
@@ -196,6 +206,7 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <div class="header">
@@ -218,7 +229,7 @@
                 <button id="joinBtn">Join</button>
                 <button id="connectBtn" style="margin-left: auto; background-color: #4CAF50;">Connect</button>
             </div>
-            
+
             <div class="input-group">
                 <input type="text" id="messageInput" placeholder="Type a message..." disabled>
                 <button id="sendBtn" disabled>Send</button>
@@ -228,7 +239,7 @@
     </div>
 
     <script>
-        const wsUrl = 'ws://localhost:8081';
+        const wsUrl = 'wss://localhost:8081';
         let ws = null;
         let myNick = 'Me';
 
@@ -247,15 +258,15 @@
         function appendMessage(type, content, sender = null) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${type}`;
-            
+
             let html = '';
             if (sender && type !== 'sent') {
                 html += `<span class="sender-name">${sender}</span>`;
             }
-            
+
             html += `<div class="message-content">${content}</div>`;
             html += `<div class="timestamp">${new Date().toLocaleTimeString()}</div>`;
-            
+
             msgDiv.innerHTML = html;
             chatArea.appendChild(msgDiv);
             chatArea.scrollTop = chatArea.scrollHeight;
@@ -296,7 +307,7 @@
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    
+
                     if (data.type === 'system') {
                         appendMessage('system', data.message);
                     } else if (data.type === 'error') {
@@ -338,7 +349,7 @@
         // Event Listeners
         connectBtn.addEventListener('click', toggleConnection);
         sendBtn.addEventListener('click', sendMessage);
-        
+
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendMessage();
         });
@@ -362,4 +373,5 @@
         appendMessage('system', 'Ready to connect...');
     </script>
 </body>
+
 </html>

@@ -115,7 +115,7 @@ void handle_sigint(int sig) {
     if (chat_server) ws_server_stop(chat_server);
 }
 
-int main() {
+int main(int argc, char** argv) {
     setbuf(stdout, NULL);
     signal(SIGINT, handle_sigint);
 
@@ -127,10 +127,25 @@ int main() {
         .on_close = on_close,
     };
 
+    int arg_idx = 1;
+
+    // Optional Port: ./chat_server [port]
+    if (argc > arg_idx && isdigit(argv[arg_idx][0])) {
+        config.port = atoi(argv[arg_idx]);
+        arg_idx++;
+    }
+
+    // Optional SSL: ./chat_server [port] [cert] [key]  OR  ./chat_server [cert] [key]
+    if (argc > arg_idx + 1) {
+        config.ssl_cert = argv[arg_idx];
+        config.ssl_key = argv[arg_idx + 1];
+        printf("SSL/TLS Enabled. Cert: %s, Key: %s\n", config.ssl_cert, config.ssl_key);
+    }
+
     chat_server = ws_server_create(&config);
     if (!chat_server) return 1;
 
-    printf("Chat server running on port 8081\n");
+    printf("Chat server running on port %d\n", config.port);
     ws_server_start(chat_server);
     ws_server_destroy(chat_server);
 

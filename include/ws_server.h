@@ -20,6 +20,10 @@ typedef struct {
     int thread_count;  // Number of worker threads (0 = auto-detect cores)
     int timeout_ms;    // Epoll timeout (default 100)
 
+    // SSL/TLS
+    const char* ssl_cert;
+    const char* ssl_key;
+
     // Callbacks
     ws_server_on_open_cb on_open;
     ws_server_on_message_cb on_message;

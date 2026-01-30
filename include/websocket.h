@@ -4,8 +4,10 @@
 #include <netdb.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
+#include <openssl/ssl.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -48,6 +50,10 @@ typedef enum {
     WS_ERR_INVALID_UTF8,
     WS_ERR_IO_ERROR,
     WS_ERR_LOCKED,
+
+    // TLS/SSL Errors
+    WS_ERR_SSL_FAILED,
+    WS_ERR_CERT_VALIDATION_FAILED,
     WS_ERR_UNKNOWN
 } ws_error_t;
 
@@ -65,12 +71,7 @@ typedef struct {
 } websocket_frame_t;
 
 // WebSocket state
-typedef enum {
-    WS_STATE_CLOSED,
-    WS_STATE_CONNECTING,
-    WS_STATE_OPEN,
-    WS_STATE_CLOSING
-} ws_state_t;
+typedef enum { WS_STATE_CLOSED, WS_STATE_CONNECTING, WS_STATE_OPEN, WS_STATE_CLOSING } ws_state_t;
 
 // Statistics
 typedef struct {
@@ -105,7 +106,12 @@ struct ws_client_s {
     int socket_fd;
     ws_state_t state;
     bool is_server;
-    
+
+    // SSL/TLS
+    SSL* ssl;
+    SSL_CTX* ssl_ctx;
+    bool use_ssl;
+
     // Thread safety
     pthread_mutex_t lock;
 
@@ -136,14 +142,14 @@ struct ws_client_s {
     ws_read_cb_t read_cb;
 
     // Internal State for Buffering/Fragmentation
-    uint8_t* send_buffer; // For future non-blocking write buffering
+    uint8_t* send_buffer;  // For future non-blocking write buffering
     size_t send_buffer_len;
     size_t send_buffer_cap;
 
     // Fragmentation reassembly
     uint8_t* frag_buffer;
     size_t frag_buffer_len;
-    uint8_t frag_opcode; // Opcode of the first fragment
+    uint8_t frag_opcode;  // Opcode of the first fragment
     bool in_fragmentation;
 
     // Statistics & Monitoring
@@ -174,6 +180,10 @@ ws_error_t ws_accept(ws_client_t* client, int client_fd);
 // Call this when the socket is readable.
 ws_error_t ws_consume(ws_client_t* client, const uint8_t* data, size_t len);
 
+// Read data from the underlying connection (SSL or socket).
+// Returns bytes read, 0 on EOF, -1 on error.
+ssize_t ws_read(ws_client_t* client, void* buffer, size_t len);
+
 // Send a text message
 ws_error_t ws_send_text(ws_client_t* client, const char* text);
 
@@ -198,8 +208,11 @@ const char* ws_strerror(ws_error_t err);
 
 void ws_set_max_payload_size(ws_client_t* client, size_t size);
 void ws_set_auto_fragment(ws_client_t* client, bool enable, size_t fragment_size);
-void ws_set_auto_ping(ws_client_t* client, bool enable); // Note: library responds to pings automatically, this is for sending pings? Or enabling auto-pong? Usually auto-pong is mandatory.
+void ws_set_auto_ping(ws_client_t* client,
+                      bool enable);  // Note: library responds to pings automatically, this is for sending pings? Or
+                                     // enabling auto-pong? Usually auto-pong is mandatory.
 void ws_set_validate_utf8(ws_client_t* client, bool enable);
+void ws_set_ssl(ws_client_t* client, bool enable);
 void ws_set_write_cb(ws_client_t* client, ws_write_cb_t cb);
 void ws_set_read_cb(ws_client_t* client, ws_read_cb_t cb);
 void ws_set_user_data(ws_client_t* client, void* user_data);

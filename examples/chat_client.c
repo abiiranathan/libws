@@ -44,7 +44,7 @@ void on_error(ws_client_t* client, const char* error) {
 int main(int argc, char** argv) {
     // Disable stdout buffering to ensure prompts appear immediately
     setbuf(stdout, NULL);
-    
+
     ws_client_t client;
     ws_init(&client);
 
@@ -55,11 +55,36 @@ int main(int argc, char** argv) {
 
     const char* host = "localhost";
     int port = 8081;
+    bool tls = false;
 
-    if (argc > 1) host = argv[1];
+    if (argc > 1) {
+        // Parse URI
+        char* uri = argv[1];
+        if (strncmp(uri, "ws://", 5) == 0) {
+            host = uri + 5;
+            port = 80;
+        } else if (strncmp(uri, "wss://", 6) == 0) {
+            host = uri + 6;
+            port = 443;
+            tls = true;
+        } else {
+            host = uri;
+        }
+
+        // Split host and port if present
+        char* p = strchr(host, ':');
+        if (p) {
+            *p = '\0'; // Note: modifies argv[1]
+            port = atoi(p + 1);
+        }
+    }
+
+    // Allow manual port override
     if (argc > 2) port = atoi(argv[2]);
 
-    printf("Connecting to %s:%d...\n", host, port);
+    ws_set_ssl(&client, tls);
+
+    printf("Connecting to %s:%d (TLS: %s)...\n", host, port, tls ? "on" : "off");
     if (ws_connect(&client, host, port, "/") != WS_OK) {
         fprintf(stderr, "Failed to connect to server\n");
         return EXIT_FAILURE;
@@ -69,12 +94,12 @@ int main(int argc, char** argv) {
     input_buffer_t input = {0};
 
     int stdin_fd = STDIN_FILENO;
-    
+
     // Main Event Loop
     while (client.state != WS_STATE_CLOSED) {
         fd_set fds;
         FD_ZERO(&fds);
-        
+
         if (stdin_fd != -1) FD_SET(stdin_fd, &fds);
         FD_SET(client.socket_fd, &fds);
 
@@ -93,26 +118,26 @@ int main(int argc, char** argv) {
             if (n > 0) {
                 input.len += (size_t)n;
                 input.buffer[input.len] = 0;
-                
+
                 // Process lines
                 char* newline;
                 while ((newline = strchr(input.buffer, '\n'))) {
                     *newline = 0;
-                    
+
                     // Handle CR if present (e.g. from telnet style input or some terminals)
                     if (newline > input.buffer && *(newline - 1) == '\r') {
                         *(newline - 1) = 0;
                     }
-                    
+
                     if (strlen(input.buffer) > 0) {
                         if (ws_send_text(&client, input.buffer) != WS_OK) {
                             printf("[Error] Failed to send message (Not connected?)\n> ");
                         } else {
-                            printf("> "); // Re-print prompt
+                            printf("> ");  // Re-print prompt
                         }
                         fflush(stdout);
                     }
-                    
+
                     // Move remaining data to front
                     size_t line_len = (size_t)(newline - input.buffer) + 1;
                     size_t remaining = input.len - line_len;
@@ -120,7 +145,7 @@ int main(int argc, char** argv) {
                     input.len = remaining;
                     input.buffer[input.len] = 0;
                 }
-                
+
                 // Buffer full protection
                 if (input.len >= sizeof(input.buffer) - 1) {
                     fprintf(stderr, "Input line too long, clearing buffer\n");
@@ -134,7 +159,7 @@ int main(int argc, char** argv) {
 
         // Handle Data from Server
         if (FD_ISSET(client.socket_fd, &fds)) {
-            ssize_t n = read(client.socket_fd, buffer, sizeof(buffer));
+            ssize_t n = ws_read(&client, buffer, sizeof(buffer));
             if (n < 0) {
                 if (errno != EINTR) {
                     perror("read");
