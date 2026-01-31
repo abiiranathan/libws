@@ -18,7 +18,7 @@ int connection_complete = 0;
 void on_open(ws_client_t* client) {
     (void)client;
     printf("Connected to server\n");
-    ws_send_text(client, "Hello World");
+    ws_send_text(client, "Hello World", 11);
 }
 
 void on_message(ws_client_t* client, const uint8_t* data, size_t size, int type) {

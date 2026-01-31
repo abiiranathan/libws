@@ -116,7 +116,7 @@ static bool is_valid_utf8(const uint8_t* data, size_t len) {
     return true;
 }
 
-char* base64_encode(const unsigned char* input, int length) {
+static char* base64_encode(const unsigned char* input, int length) {
     if (!input || length <= 0) return NULL;
 
     BIO *bio, *b64;
@@ -149,7 +149,7 @@ char* base64_encode(const unsigned char* input, int length) {
     return result;
 }
 
-char* generate_websocket_accept(const char* websocket_key) {
+static char* generate_websocket_accept(const char* websocket_key) {
     if (!websocket_key) return NULL;
 
     const char* magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -162,7 +162,7 @@ char* generate_websocket_accept(const char* websocket_key) {
     return base64_encode(hash, SHA_DIGEST_LENGTH);
 }
 
-char* extract_websocket_key(const char* request) {
+static char* extract_websocket_key(const char* request) {
     if (!request) return NULL;
 
     const char* key_header = "Sec-WebSocket-Key:";
@@ -587,7 +587,7 @@ static int handle_handshake_request(ws_client_t* client) {
 }
 
 // Returns bytes consumed or -1 on error/incomplete
-int parse_websocket_frame(const uint8_t* buffer, size_t len, websocket_frame_t* frame) {
+static int parse_websocket_frame(const uint8_t* buffer, size_t len, websocket_frame_t* frame) {
     if (!buffer || !frame || len < 2) return 0;
 
     memset(frame, 0, sizeof(websocket_frame_t));
@@ -701,22 +701,19 @@ ws_error_t ws_consume(ws_client_t* client, const uint8_t* data, size_t len) {
             dispatch_frame(client, &frame);
             client->stats.frames_received++;
 
-            // Check if connection was closed during dispatch
-            if (client->state == WS_STATE_CLOSING || client->state == WS_STATE_CLOSED) {
-                // If closing/closed, we stop processing further frames
-                // But we still need to manage the buffer - actually if closed, we can just return
-                // The remaining data in buffer is discarded or kept for next call (if any)
-                // But typically if closed, we stop.
-                pthread_mutex_unlock(&client->lock);
-                return WS_OK;  // Or appropriate status
-            }
-
             // Remove processed frame
             size_t remaining = client->recv_buffer_len - (size_t)bytes_consumed;
             if (remaining > 0) {
                 memmove(client->recv_buffer, client->recv_buffer + bytes_consumed, remaining);
             }
             client->recv_buffer_len = remaining;
+
+            // Check if connection was closed during dispatch
+            if (client->state == WS_STATE_CLOSING || client->state == WS_STATE_CLOSED) {
+                // If closing/closed, we stop processing further frames
+                pthread_mutex_unlock(&client->lock);
+                return WS_OK;  // Or appropriate status
+            }
         }
     }
 
@@ -1021,19 +1018,8 @@ static ws_error_t send_fragmented(ws_client_t* client, const uint8_t* data, size
     return WS_OK;
 }
 
-ws_error_t ws_send_text(ws_client_t* client, const char* text) {
+ws_error_t ws_send_text(ws_client_t* client, const char* text, size_t len) {
     if (!client || !text) return WS_ERR_INVALID_PARAMETER;
-
-    pthread_mutex_lock(&client->lock);
-    ws_error_t err = send_fragmented(client, (const uint8_t*)text, strlen(text), WS_OPCODE_TEXT);
-    pthread_mutex_unlock(&client->lock);
-    return err;
-}
-
-ws_error_t ws_send_text_len(ws_client_t* client, const char* text, size_t len) {
-    if (!client) return WS_ERR_INVALID_PARAMETER;
-    // Allow text to be NULL if len is 0 (empty message)
-    if (len > 0 && !text) return WS_ERR_INVALID_PARAMETER;
 
     pthread_mutex_lock(&client->lock);
     ws_error_t err = send_fragmented(client, (const uint8_t*)text, len, WS_OPCODE_TEXT);

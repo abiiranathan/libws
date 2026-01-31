@@ -104,7 +104,7 @@ void ws_client_stop_thread(ws_client_context_t* ctx);
 // ============================================================================
 
 // Send text message
-ws_error_t ws_client_send_text(ws_client_context_t* ctx, const char* text);
+ws_error_t ws_client_send_text(ws_client_context_t* ctx, const char* text, size_t len);
 
 // Send binary message
 ws_error_t ws_client_send_binary(ws_client_context_t* ctx, const uint8_t* data, size_t len);

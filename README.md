@@ -151,7 +151,7 @@ ws_accept(&client, client_fd);
 
 ```c
 // Send Text
-ws_send_text(&client, "Hello World");
+ws_send_text(&client, "Hello World", 11);
 
 // Send Binary
 uint8_t data[] = {0x01, 0x02, 0x03};

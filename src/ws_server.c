@@ -885,15 +885,15 @@ void ws_server_destroy(ws_server_t* server) {
     free(server);
 }
 
-void ws_server_broadcast_text(ws_server_t* server, const char* msg) {
-    ws_server_broadcast_text_filter(server, msg, NULL, NULL);
+void ws_server_broadcast_text(ws_server_t* server, const char* msg, size_t len) {
+    ws_server_broadcast_text_filter(server, msg, len, NULL, NULL);
 }
 
 void ws_server_broadcast_binary(ws_server_t* server, const uint8_t* data, size_t len) {
     ws_server_broadcast_binary_filter(server, data, len, NULL, NULL);
 }
 
-void ws_server_broadcast_text_filter(ws_server_t* server, const char* msg, ws_filter_cb_t filter, void* arg) {
+void ws_server_broadcast_text_filter(ws_server_t* server, const char* msg, size_t len, ws_filter_cb_t filter, void* arg) {
     if (!server || !msg) return;
 
     for (int i = 0; i < server->worker_count; ++i) {
@@ -920,7 +920,7 @@ void ws_server_broadcast_text_filter(ws_server_t* server, const char* msg, ws_fi
                     ws_client_t* client = &conn->ws_client;
                     if (client->state == WS_STATE_OPEN) {
                         if (!filter || filter(client, arg)) {
-                            ws_send_text(client, msg);
+                            ws_send_text(client, msg, len);
                         }
                     }
                 }

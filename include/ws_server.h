@@ -43,7 +43,7 @@ void ws_server_stop(ws_server_t* server);
 void ws_server_destroy(ws_server_t* server);
 
 // Broadcast a text message to all connected clients
-void ws_server_broadcast_text(ws_server_t* server, const char* msg);
+void ws_server_broadcast_text(ws_server_t* server, const char* msg, size_t len);
 
 // Broadcast binary data to all connected clients
 void ws_server_broadcast_binary(ws_server_t* server, const uint8_t* data, size_t len);
@@ -53,7 +53,7 @@ void ws_server_broadcast_binary(ws_server_t* server, const uint8_t* data, size_t
 typedef bool (*ws_filter_cb_t)(ws_client_t* client, void* arg);
 
 // Broadcast a text message to clients matching the filter
-void ws_server_broadcast_text_filter(ws_server_t* server, const char* msg, ws_filter_cb_t filter, void* arg);
+void ws_server_broadcast_text_filter(ws_server_t* server, const char* msg, size_t len, ws_filter_cb_t filter, void* arg);
 
 // Broadcast binary data to clients matching the filter
 void ws_server_broadcast_binary_filter(ws_server_t* server, const uint8_t* data, size_t len, ws_filter_cb_t filter,

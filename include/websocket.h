@@ -189,10 +189,8 @@ ws_error_t ws_consume(ws_client_t* client, const uint8_t* data, size_t len);
 ssize_t ws_read(ws_client_t* client, void* buffer, size_t len);
 
 // Send a text message
-ws_error_t ws_send_text(ws_client_t* client, const char* text);
-
-// Send a text message with explicit length
-ws_error_t ws_send_text_len(ws_client_t* client, const char* text, size_t len);
+// len: length of the text message.
+ws_error_t ws_send_text(ws_client_t* client, const char* text, size_t len);
 
 // Send a binary message
 ws_error_t ws_send_binary(ws_client_t* client, const uint8_t* data, size_t len);
@@ -254,13 +252,7 @@ typedef void (*ws_stdin_line_handler_t)(ws_client_t* client, const char* line, v
 ws_error_t ws_run_interactive(ws_client_t* client, ws_stdin_line_handler_t handler, void* user_data, int timeout_ms);
 
 // ============================================================================
-// Low-level Utilities (exposed for testing/advanced usage)
+// Low-level Utilities
 // ============================================================================
-
-char* base64_encode(const unsigned char* input, int length);
-char* generate_websocket_accept(const char* websocket_key);
-char* extract_websocket_key(const char* request);
-// Returns number of bytes consumed or -1 on error
-int parse_websocket_frame(const uint8_t* buffer, size_t len, websocket_frame_t* frame);
 
 #endif /* WEBSOCKET_H */

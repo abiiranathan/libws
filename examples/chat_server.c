@@ -55,19 +55,19 @@ void send_to_channel(ws_client_t* sender, const char* channel, const char* msg, 
 
     broadcast_args_t args = {.channel = channel, .sender = sender, .exclude_sender = exclude_sender};
 
-    ws_server_broadcast_text_filter(chat_server, json, channel_filter, &args);
+    ws_server_broadcast_text_filter(chat_server, json, strlen(json), channel_filter, &args);
 }
 
 void send_system_message(ws_client_t* client, const char* message) {
     char json[512];
     snprintf(json, sizeof(json), "{\"type\":\"system\",\"message\":\"%s\"}", message);
-    ws_send_text(client, json);
+    ws_send_text(client, json, strlen(json));
 }
 
 void send_error_message(ws_client_t* client, const char* error) {
     char json[512];
     snprintf(json, sizeof(json), "{\"type\":\"error\",\"message\":\"%s\"}", error);
-    ws_send_text(client, json);
+    ws_send_text(client, json, strlen(json));
 }
 
 void process_command(ws_client_t* client, char* text) {

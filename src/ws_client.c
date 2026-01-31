@@ -487,10 +487,10 @@ void ws_client_stop_thread(ws_client_context_t* ctx) {
 // Messaging (Thread-safe through ws_client_t's mutex)
 // ============================================================================
 
-ws_error_t ws_client_send_text(ws_client_context_t* ctx, const char* text) {
+ws_error_t ws_client_send_text(ws_client_context_t* ctx, const char* text, size_t len) {
     if (!ctx || !text) return WS_ERR_INVALID_PARAMETER;
 
-    ws_error_t err = ws_send_text(&ctx->ws_client, text);
+    ws_error_t err = ws_send_text(&ctx->ws_client, text, len);
     if (err == WS_OK) {
         ctx->messages_sent++;
     }

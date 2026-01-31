@@ -44,7 +44,7 @@ void handle_stdin_line(ws_client_t* client, const char* line, void* user_data) {
     }
 
     // Send the line to the server
-    if (ws_send_text(client, line) != WS_OK) {
+    if (ws_send_text(client, line, strlen(line)) != WS_OK) {
         printf("[Error] Failed to send message\n> ");
     } else {
         printf("> ");
