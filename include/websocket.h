@@ -147,8 +147,12 @@ struct ws_client_s {
     size_t send_buffer_cap;
 
     // Fragmentation reassembly
-    uint8_t* frag_buffer;
-    size_t frag_buffer_len;
+    struct {
+        uint8_t* buffer;
+        size_t len;
+        size_t cap;
+    } frag_arena;
+
     uint8_t frag_opcode;  // Opcode of the first fragment
     bool in_fragmentation;
 

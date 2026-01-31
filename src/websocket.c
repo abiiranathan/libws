@@ -185,13 +185,11 @@ char* extract_websocket_key(const char* request) {
     return key;
 }
 
-// Helper to safely reset fragment buffer
+// Helper to safely reset fragment buffer (Arena style - retains memory)
 static void reset_fragment_buffer(ws_client_t* client) {
-    if (client->frag_buffer) {
-        free(client->frag_buffer);
-        client->frag_buffer = NULL;
-    }
-    client->frag_buffer_len = 0;
+    // Reset length only, do not free memory (Arena reset)
+    client->frag_arena.len = 0;
+
     client->in_fragmentation = false;
     client->frag_opcode = 0;
 }
@@ -264,11 +262,12 @@ void ws_cleanup(ws_client_t* client) {
     client->send_buffer_len = 0;
     client->send_buffer_cap = 0;
 
-    if (client->frag_buffer) {
-        free(client->frag_buffer);
-        client->frag_buffer = NULL;
+    if (client->frag_arena.buffer) {
+        free(client->frag_arena.buffer);
+        client->frag_arena.buffer = NULL;
     }
-    client->frag_buffer_len = 0;
+    client->frag_arena.len = 0;
+    client->frag_arena.cap = 0;
 
     // Socket cleanup
     if (client->socket_fd != -1) {
@@ -849,24 +848,31 @@ static void dispatch_frame(ws_client_t* client, websocket_frame_t* frame) {
     }
 
     // Buffer handling
-    if (client->frag_buffer_len + frame->payload_length > client->max_payload_size) {
+    size_t needed_len = client->frag_arena.len + frame->payload_length;
+    if (needed_len > client->max_payload_size) {
         reset_fragment_buffer(client);
         ws_close(client, WS_STATUS_TOO_LARGE, "Message too large");
         return;
     }
 
-    // Append to fragmentation buffer
-    uint8_t* new_frag = realloc(client->frag_buffer, client->frag_buffer_len + frame->payload_length);
-    if (!new_frag) {
-        reset_fragment_buffer(client);
-        if (client->on_error) {
-            client->on_error(client, "OOM during reassembly");
+    // Append to fragmentation arena (grow if needed)
+    if (needed_len > client->frag_arena.cap) {
+        size_t new_cap = needed_len + BUFFER_GROWTH_CHUNK;
+        uint8_t* new_buf = realloc(client->frag_arena.buffer, new_cap);
+        if (!new_buf) {
+            reset_fragment_buffer(client);
+            if (client->on_error) {
+                client->on_error(client, "OOM during reassembly");
+            }
+            return;
         }
-        return;
+
+        client->frag_arena.buffer = new_buf;
+        client->frag_arena.cap = new_cap;
     }
-    client->frag_buffer = new_frag;
-    memcpy(client->frag_buffer + client->frag_buffer_len, frame->payload, frame->payload_length);
-    client->frag_buffer_len += frame->payload_length;
+
+    memcpy(client->frag_arena.buffer + client->frag_arena.len, frame->payload, frame->payload_length);
+    client->frag_arena.len += frame->payload_length;
 
     if (frame->fin) {
         // Message complete
@@ -874,7 +880,7 @@ static void dispatch_frame(ws_client_t* client, websocket_frame_t* frame) {
 
         // UTF-8 Validation
         if (client->validate_utf8 && type == WS_OPCODE_TEXT) {
-            if (!is_valid_utf8(client->frag_buffer, client->frag_buffer_len)) {
+            if (!is_valid_utf8(client->frag_arena.buffer, client->frag_arena.len)) {
                 reset_fragment_buffer(client);
                 ws_close(client, WS_STATUS_INVALID_DATA, "Invalid UTF-8");
                 return;
@@ -882,7 +888,7 @@ static void dispatch_frame(ws_client_t* client, websocket_frame_t* frame) {
         }
 
         if (client->on_message) {
-            client->on_message(client, client->frag_buffer, client->frag_buffer_len, type);
+            client->on_message(client, client->frag_arena.buffer, client->frag_arena.len, type);
         }
 
         // Reset buffer

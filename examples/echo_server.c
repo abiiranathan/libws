@@ -28,9 +28,8 @@ int main(int argc, char** argv) {
         .port = 9001,
         .thread_count = 1,
         .on_message = on_message,
-        .timeout_ms = 10000,
+        .timeout_ms = 1000,
     };
-
     server = ws_server_create(&config);
     if (!server) {
         fprintf(stderr, "Failed to create server\n");
@@ -40,6 +39,5 @@ int main(int argc, char** argv) {
     printf("Echo server running on port %d\n", config.port);
     ws_server_start(server);
     ws_server_destroy(server);
-
     return 0;
 }
